@@ -1,41 +1,59 @@
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver  # in-memory checkpointer
 
-# --- State definition ---
-class GreetingState(TypedDict, total=False):
-    name: str
-    greetings: list[str]   # keep full history of greetings
+# Define a state
+class userState(TypedDict):
+    is_premium: bool
+    message: str  # this will store the message
 
-# --- Node ---
-def greeting_node(state: GreetingState):
-    name = state.get("name", "Friend")   # fallback if missing
-    greeting = f"Hello {name}"
+# Step 1: Greet the user
+def greet_user(state: userState):
+    state["message"] = "Welcome. "
+    return state
 
-    # append to greetings list
-    past = state.get("greetings", [])
-    past.append(greeting)
+# Step 2: Just return the state without branching here
+def check_subscription(state: userState):
+    return state
 
-    return {"name": name, "greetings": past}
+# Step 3: Final messages
+def premium_greeting(state: userState):
+    state["message"] += "Thanks for being a premium user."
+    return state
 
-# --- Build graph ---
-builder = StateGraph(GreetingState)
-builder.add_node("greeting_node", greeting_node)
+def normal_greeting(state: userState):
+    state["message"] += "Enjoy being our customer."
+    return state
 
-builder.add_edge(START, "greeting_node")
-builder.add_edge("greeting_node", END)
+# Step 4: Conditional edge selector function
+def decide_next_node(state: userState) -> str:
+    return "premium_greeting" if state["is_premium"] else "normal_greeting"
 
-# --- Use memory checkpointer ---
-checkpointer = MemorySaver()
-graph = builder.compile(checkpointer=checkpointer)
+# Build the graph
+builder = StateGraph(userState)
 
-# --- Run with persistent thread ---
-print(graph.invoke({"name": "Sherlock"}, config={"configurable": {"thread_id": "1"}}))
-# {'name': 'Sherlock', 'greetings': ['Hello Sherlock']}
+# Add nodes
+builder.add_node("greet_user", greet_user)
+builder.add_node("check_subscription", check_subscription)
+builder.add_node("premium_greeting", premium_greeting)
+builder.add_node("normal_greeting", normal_greeting)
 
-print(graph.invoke({"name": "Watson"}, config={"configurable": {"thread_id": "1"}}))
-# {'name': 'Watson', 'greetings': ['Hello Sherlock', 'Hello Watson']}
+# Add edges
+builder.add_edge(START, "greet_user")
+builder.add_edge("greet_user", "check_subscription")
 
-print(graph.invoke({}, config={"configurable": {"thread_id": "1"}}))
-# falls back to "Friend", keeps history:
-# {'name': 'Friend', 'greetings': ['Hello Sherlock', 'Hello Watson', 'Hello Friend']}
+# Conditional branching based on a separate decision function
+builder.add_conditional_edges("check_subscription", decide_next_node)
+
+builder.add_edge("premium_greeting", END)
+builder.add_edge("normal_greeting", END)
+
+# Compile and run
+graph = builder.compile()
+
+print("\nPremium User:")
+result = graph.invoke({"is_premium": True, "message": ""})
+print(result)
+
+print("\nNormal User:")
+result = graph.invoke({"is_premium": False, "message": ""})
+print(result)
